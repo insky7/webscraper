@@ -7,7 +7,7 @@ use axum::{
 use scc::Queue;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use thirtyfour::{By, DesiredCapabilities, WebDriver};
+use thirtyfour::{By, ChromiumLikeCapabilities, DesiredCapabilities, WebDriver};
 #[derive(Deserialize, Serialize)]
 // I made a struct to capture URL by user input, honestly probably not needed, maybe enum better?
 pub struct UrlFinder {
@@ -58,18 +58,15 @@ pub async fn use_html_v2(State(state): State<Arc<AppState>>) -> impl IntoRespons
 
 pub async fn scrape_stuff_v2(req: Request<Body>) -> impl IntoResponse {
     let body_bytes = to_bytes(req.into_body(), usize::MAX).await.unwrap();
-    let url = {
-        let payload = serde_json::from_slice::<UrlFinder>(&body_bytes).unwrap();
-        payload.url
-    };
-    // pretty cool to just add elem name into the struct i thought ;)
-    let searched_elem = {
-        let payload = serde_json::from_slice::<UrlFinder>(&body_bytes).unwrap();
-        payload.element_name
-    };
-    let caps = DesiredCapabilities::chrome();
+    let payload = serde_json::from_slice::<UrlFinder>(&body_bytes).unwrap();
+    let url = payload.url;
+    let searched_elem = payload.element_name;
+
+    let mut caps = DesiredCapabilities::chrome();
+    caps.set_headless().unwrap();
     // i thought, shouldn't the url share the port of the axum server?? O_o, not sure if thats the way to go.
     let mut driver = WebDriver::new("http://localhost:9515", caps).await;
+
     // let url = state.lock().unwrap().clone();
     // I guess this part below could crash if URL is not supplied, I need a middleware to validate proper formatted requests, think that is a good approach.
     driver.as_mut().unwrap().get(url).await.unwrap();
@@ -80,12 +77,11 @@ pub async fn scrape_stuff_v2(req: Request<Body>) -> impl IntoResponse {
     THIS NEEDS BETTER ERROR HANDLING BEYOND THIS POINT, the request will literally crash if the element isnt found! My idea is to match the result of Ok(driver)
     and instead of unwrapping I can properly handle the option types returned in the iteration of elements
     */
-    for elem in driver
+    if let Ok(elem) = driver
         .unwrap()
         // https://www.youtube.com/watch?v=TCm9788Tb5g
         .find_all(By::ClassName(searched_elem))
         .await
-        .iter()
     {
         elem.iter()
             .next()
@@ -93,7 +89,7 @@ pub async fn scrape_stuff_v2(req: Request<Body>) -> impl IntoResponse {
             .expect("ELEMENT NOT FOUND")
             .text()
             .await
-            // oh no what is he doing chat
+            // oh no what is he doing
             .expect("ELEMENT NOT FOUND")
             .as_bytes()
             // is cloning bad here?
