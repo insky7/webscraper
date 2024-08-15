@@ -57,47 +57,65 @@ pub async fn use_html_v2(State(state): State<Arc<AppState>>) -> impl IntoRespons
 }
 
 pub async fn scrape_stuff_v2(req: Request<Body>) -> impl IntoResponse {
-    let body_bytes = to_bytes(req.into_body(), usize::MAX).await.unwrap();
-    let payload = serde_json::from_slice::<UrlFinder>(&body_bytes).unwrap();
-    let url = payload.url;
-    let searched_elem = payload.element_name;
+    let body_bytes = match to_bytes(req.into_body(), usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::info!("No request received: {:?}", error);
+            return (StatusCode::BAD_REQUEST, "Invalid request").into_response();
+        }
+    };
+
+    // Deserialize the body bytes into UrlFinder
+    let payload = match serde_json::from_slice::<UrlFinder>(&body_bytes) {
+        Ok(data) => data,
+        Err(error) => {
+            tracing::info!("Failed to deserialize request body: {:?}", error);
+            return (StatusCode::BAD_REQUEST, "Invalid JSON in request").into_response();
+        }
+    };
 
     let mut caps = DesiredCapabilities::chrome();
     caps.set_headless().unwrap();
     // i thought, shouldn't the url share the port of the axum server?? O_o, not sure if thats the way to go.
-    let mut driver = WebDriver::new("http://localhost:9515", caps).await;
-
-    // let url = state.lock().unwrap().clone();
-    // I guess this part below could crash if URL is not supplied, I need a middleware to validate proper formatted requests, think that is a good approach.
-    driver.as_mut().unwrap().get(url).await.unwrap();
+    let driver: WebDriver = match WebDriver::new("http://localhost:9515", caps).await {
+        Ok(driver) => match driver.goto(&payload.url).await {
+            Ok(_d) => driver,
+            Err(_e) => {
+                tracing::info!(
+                    "Web driver encountered an error navigating to the URL {:?}",
+                    payload.url
+                );
+                return (StatusCode::BAD_REQUEST, "Invalid request").into_response();
+            }
+        },
+        Err(_err) => {
+            tracing::info!(
+                "Web driver encountered an error, usually this means it did not start successfully"
+            );
+            return (StatusCode::BAD_REQUEST, "Invalid request").into_response();
+        }
+    };
     // Is a vec appropriate here??
     // create vec to store found elems
     let mut stringified_elem: Vec<u8> = Vec::new();
-    /*
-    THIS NEEDS BETTER ERROR HANDLING BEYOND THIS POINT, the request will literally crash if the element isnt found! My idea is to match the result of Ok(driver)
-    and instead of unwrapping I can properly handle the option types returned in the iteration of elements
-    */
-    if let Ok(elem) = driver
-        .unwrap()
+
+    match driver
         // https://www.youtube.com/watch?v=TCm9788Tb5g
-        .find_all(By::ClassName(searched_elem))
+        .find_all(By::ClassName(payload.element_name))
         .await
     {
-        elem.iter()
-            .next()
-            // oh god
-            .expect("ELEMENT NOT FOUND")
-            .text()
-            .await
-            // oh no what is he doing
-            .expect("ELEMENT NOT FOUND")
-            .as_bytes()
-            // is cloning bad here?
-            // ALERT!!!! UNNECESSARY CLONING!
-            // UNNECESSARY CLONING!
-            // UNNECESSARY CLONING!
-            // UNNECESSARY CLONING!
-            .clone_into(&mut stringified_elem);
+        Ok(elem) => match elem.iter().next() {
+            Some(val) => match val.text().await {
+                // is cloning bad here? i feel like theres a way to push it into the vec but im too lazy
+                Ok(t) => t.as_bytes().clone_into(&mut stringified_elem),
+                Err(_) => todo!(),
+            },
+            None => {
+                tracing::info!("Web driver encountered an error locating the given elements");
+                return (StatusCode::BAD_REQUEST, "Invalid request").into_response();
+            }
+        },
+        Err(_) => todo!(),
     }
     // return vec of elems
     (stringified_elem).into_response()
