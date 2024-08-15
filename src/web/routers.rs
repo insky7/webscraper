@@ -115,7 +115,10 @@ pub async fn scrape_stuff_v2(req: Request<Body>) -> impl IntoResponse {
                 return (StatusCode::BAD_REQUEST, "Invalid request").into_response();
             }
         },
-        Err(_) => todo!(),
+        Err(_) => {
+            tracing::info!("Web driver encountered an error locating the given elements");
+            return (StatusCode::BAD_REQUEST, "Invalid request").into_response();
+        }
     }
     // return vec of elems
     (stringified_elem).into_response()
