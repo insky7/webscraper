@@ -76,7 +76,6 @@ pub async fn scrape_stuff_v2(req: Request<Body>) -> impl IntoResponse {
 
     let mut caps = DesiredCapabilities::chrome();
     caps.set_headless().unwrap();
-    // i thought, shouldn't the url share the port of the axum server?? O_o, not sure if thats the way to go.
     let driver: WebDriver = match WebDriver::new("http://localhost:9515", caps).await {
         Ok(driver) => match driver.goto(&payload.url).await {
             Ok(_d) => driver,
@@ -99,27 +98,27 @@ pub async fn scrape_stuff_v2(req: Request<Body>) -> impl IntoResponse {
     // create vec to store found elems
     let mut stringified_elem: Vec<u8> = Vec::new();
 
-    match driver
-        // https://www.youtube.com/watch?v=TCm9788Tb5g
-        .find_all(By::ClassName(payload.element_name))
-        .await
-    {
-        Ok(elem) => match elem.iter().next() {
-            Some(val) => match val.text().await {
-                // is cloning bad here? i feel like theres a way to push it into the vec but im too lazy
-                Ok(t) => t.as_bytes().clone_into(&mut stringified_elem),
-                Err(_) => todo!(),
-            },
-            None => {
-                tracing::info!("Web driver encountered an error locating the given elements");
-                return (StatusCode::BAD_REQUEST, "Invalid request").into_response();
+    match driver.find_all(By::XPath(payload.element_name)).await {
+        Ok(elems) => {
+            for elem in elems {
+                match elem.text().await {
+                    Ok(t) => {
+                        stringified_elem.extend_from_slice(t.as_bytes());
+                        stringified_elem.extend_from_slice(b"\n");
+                    }
+                    Err(_) => {
+                        tracing::info!("Error retrieving text from an element");
+                        return (StatusCode::BAD_REQUEST, "Invalid request").into_response();
+                    }
+                }
             }
-        },
+        }
         Err(_) => {
-            tracing::info!("Web driver encountered an error locating the given elements");
+            tracing::info!("Error locating elements with the given class name");
             return (StatusCode::BAD_REQUEST, "Invalid request").into_response();
         }
     }
-    // return vec of elems
+
+    // Return the combined text of all elements
     (stringified_elem).into_response()
 }
